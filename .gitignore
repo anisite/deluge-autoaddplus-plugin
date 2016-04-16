@@ -1,6 +1,6 @@
 build/*
 dist/*
-AutoAddPlus.egg-info/*
+AutoAdd.egg-info/*
 *.pyc
 *.pyo
 *.bak
