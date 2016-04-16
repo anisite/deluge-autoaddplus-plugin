@@ -31,12 +31,12 @@ Copyright:
     statement from all source files in the program, then also delete it here.
 */
 
-AutoAddPluginPP = Ext.extend(Deluge.Plugin, {
+AutoAddPlugin = Ext.extend(Deluge.Plugin, {
 	constructor: function(config) {
 		config = Ext.apply({
-			name: "AutoAdd++"
+			name: "AutoAdd"
 		}, config);
-		AutoAddPluginPP.superclass.constructor.call(this, config);
+		AutoAddPlugin.superclass.constructor.call(this, config);
 	},
 	
 	onDisable: function() {
@@ -47,4 +47,4 @@ AutoAddPluginPP = Ext.extend(Deluge.Plugin, {
 		
 	}
 });
-new AutoAddPluginPP();
+new AutoAddPlugin();
