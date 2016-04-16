@@ -1,2 +1,2 @@
-# deluge-autoaddpp-plugin
+# deluge-autoaddplus-plugin
 Adds multiple watch folder AND subfolders support to Deluge
