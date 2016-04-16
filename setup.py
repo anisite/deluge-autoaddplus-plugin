@@ -39,13 +39,13 @@
 
 from setuptools import setup
 
-__plugin_name__ = "AutoAdd"
-__author__ = "Chase Sterling"
-__author_email__ = "chase.sterling@gmail.com"
-__version__ = "1.02"
-__url__ = "http://forum.deluge-torrent.org/viewtopic.php?f=9&t=26775"
+__plugin_name__ = "AutoAddPlus"
+__author__ = "Dany Cote (original by Chase Sterling)"
+__author_email__ = "infologique@gmail.com"
+__version__ = "1.00"
+__url__ = ""
 __license__ = "GPLv3"
-__description__ = "Monitors folders for .torrent files."
+__description__ = "Monitors folders AND subfolders for .torrent files."
 __long_description__ = """"""
 __pkg_data__ = {__plugin_name__.lower(): ["template/*", "data/*"]}
 

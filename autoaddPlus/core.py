@@ -57,7 +57,7 @@ OPTIONS_AVAILABLE = { #option: builtin
     "enabled":False,
     "path":False,
     "append_extension":False,
-    "abspath":False, 
+    "abspath":False,
     "download_location":True,
     "max_download_speed":True,
     "max_upload_speed":True,
@@ -77,7 +77,7 @@ OPTIONS_AVAILABLE = { #option: builtin
 
 MAX_NUM_ATTEMPTS = 10
 
-class AutoaddOptionsChangedEvent(DelugeEvent):
+class AutoaddPlusOptionsChangedEvent(DelugeEvent):
     """Emitted when the options for the plugin are changed."""
     def __init__(self):
         pass
@@ -88,9 +88,9 @@ def CheckInput(cond, message):
 
 class Core(CorePluginBase):
     def enable(self):
-        
+
         #reduce typing, assigning some values to self...
-        self.config = deluge.configmanager.ConfigManager("autoadd.conf", DEFAULT_PREFS)
+        self.config = deluge.configmanager.ConfigManager("autoaddplus.conf", DEFAULT_PREFS)
         self.watchdirs = self.config["watchdirs"]
         self.core_cfg = deluge.configmanager.ConfigManager("core.conf")
 
@@ -99,18 +99,18 @@ class Core(CorePluginBase):
         # Loopingcall timers for each enabled watchdir
         self.update_timers = {}
         # If core autoadd folder is enabled, move it to the plugin
-        if self.core_cfg.config.get('autoadd_enable'):
+        if self.core_cfg.config.get('autoaddplus_enable'):
             # Disable core autoadd
-            self.core_cfg['autoadd_enable'] = False
+            self.core_cfg['autoaddplus_enable'] = False
             self.core_cfg.save()
             # Check if core autoadd folder is already added in plugin
-            for watchdir in self.watchdirs:
-                if os.path.abspath(self.core_cfg['autoadd_location']) == watchdir['abspath']:
+            for watchdir in self.watchdirs.itervalues():
+                if os.path.abspath(self.core_cfg['autoaddplus_location']) == watchdir['abspath']:
                     watchdir['enabled'] = True
                     break
             else:
                 # didn't find core watchdir, add it
-                self.add({'path':self.core_cfg['autoadd_location'], 'enabled':True})
+                self.add({'path':self.core_cfg['autoaddplus_location'], 'enabled':True})
         deferLater(reactor, 5, self.enable_looping)
 
     def enable_looping(self):
@@ -127,7 +127,7 @@ class Core(CorePluginBase):
 
     def update(self):
         pass
-        
+
     @export()
     def set_options(self, watchdir_id, options):
         """Update the options for a watch folder."""
@@ -143,22 +143,25 @@ class Core(CorePluginBase):
         for key in options.keys():
             if not key in OPTIONS_AVAILABLE:
                 if not key in [key2+'_toggle' for key2 in OPTIONS_AVAILABLE.iterkeys()]:
-                    raise Exception("autoadd: Invalid options key:%s" % key)
+                    raise Exception("autoaddplus: Invalid options key:%s" % key)
         #disable the watch loop if it was active
         if watchdir_id in self.update_timers:
             self.disable_watchdir(watchdir_id)
-        
+
         self.watchdirs[watchdir_id].update(options)
         #re-enable watch loop if appropriate
         if self.watchdirs[watchdir_id]['enabled']:
             self.enable_watchdir(watchdir_id)
         self.config.save()
-        component.get("EventManager").emit(AutoaddOptionsChangedEvent())
-        
-    def load_torrent(self, filename):
+        component.get("EventManager").emit(AutoaddPlusOptionsChangedEvent())
+
+    def load_torrent(self, filename, magnet):
         try:
             log.debug("Attempting to open %s for add.", filename)
-            _file = open(filename, "rb")
+            if magnet == False:
+                _file = open(filename, "rb")
+            elif magnet == True:
+                _file = open(filename, "r")
             filedump = _file.read()
             if not filedump:
                 raise RuntimeError, "Torrent is 0 bytes!"
@@ -168,24 +171,58 @@ class Core(CorePluginBase):
             raise e
 
         # Get the info to see if any exceptions are raised
-        info = lt.torrent_info(lt.bdecode(filedump))
+        if magnet == False:
+            lt.torrent_info(lt.bdecode(filedump))
 
         return filedump
-        
+
+    def split_magnets(self, filename):
+        log.debug("Attempting to open %s for splitting magnets.", filename)
+        try:
+            _file = open(filename, "r")
+        except IOError, e:
+            log.warning("Unable to open %s: %s", filename, e)
+            raise e
+        else:
+            magnets = list(filter(len, _file.readlines()))
+            _file.close()
+            if len(magnets) < 2:
+                return
+            n = 0
+            path = filename.rsplit(os.sep, 1)[0]
+            for magnet in magnets:
+                for part in magnet.split('&'):
+                    if part.startswith("dn="):
+                        mname = os.sep.join([path, part[3:] + ".magnet"])
+                        break
+                else:
+                    mname = '.'.join([filename, str(n), "magnet"])
+                    n += 1
+                try:
+                    _mfile = open(mname, "w")
+                except IOError, e:
+                    log.warning("Unable to open %s: %s", mname, e)
+                else:
+                    _mfile.write(magnet)
+                    _mfile.close()
+            return magnets
+
     def update_watchdir(self, watchdir_id):
         """Check the watch folder for new torrents to add."""
         watchdir_id = str(watchdir_id)
         watchdir = self.watchdirs[watchdir_id]
+        #log.debug("Message")
+        #log.debug(watchdir)
         if not watchdir['enabled']:
             # We shouldn't be updating because this watchdir is not enabled
             self.disable_watchdir(watchdir_id)
             return
 
         if not os.path.isdir(watchdir["abspath"]):
-            log.warning("Invalid AutoAdd folder: %s", watchdir["abspath"])
+            log.warning("Invalid AutoAddPlus folder: %s", watchdir["abspath"])
             self.disable_watchdir(watchdir_id)
             return
-        
+
         # Generate options dict for watchdir
         opts = {}
         if 'stop_at_ratio_toggle' in watchdir:
@@ -196,57 +233,115 @@ class Core(CorePluginBase):
             if OPTIONS_AVAILABLE.get(option):
                 if watchdir.get(option+'_toggle', True):
                     opts[option] = value
-        for filename in os.listdir(watchdir["abspath"]):
-            if filename.split(".")[-1] == "torrent":
-                try:
-                    filepath = os.path.join(watchdir["abspath"], filename)
-                except UnicodeDecodeError, e:
-                    log.error("Unable to auto add torrent due to inproper filename encoding: %s", e)
-                    continue
-                try:
-                    filedump = self.load_torrent(filepath)
-                except (RuntimeError, Exception), e:
-                    # If the torrent is invalid, we keep track of it so that we
-                    # can try again on the next pass.  This is because some
-                    # torrents may not be fully saved during the pass.
-                    log.debug("Torrent is invalid: %s", e)
-                    if filename in self.invalid_torrents:
-                        self.invalid_torrents[filename] += 1
-                        if self.invalid_torrents[filename] >= MAX_NUM_ATTEMPTS:
-                            os.rename(filepath, filepath + ".invalid")
-                            del self.invalid_torrents[filename]
-                    else:
-                        self.invalid_torrents[filename] = 1
-                    continue
 
-                # The torrent looks good, so lets add it to the session.
-                torrent_id = component.get("TorrentManager").add(filedump=filedump, filename=filename, options=opts)
-                # If the torrent added successfully, set the extra options.
-                if torrent_id:
-                    if 'Label' in component.get("CorePluginManager").get_enabled_plugins():
-                        if watchdir.get('label_toggle', True) and watchdir.get('label'):
-                            label = component.get("CorePlugin.Label")
-                            if not watchdir['label'] in label.get_labels():
-                                label.add(watchdir['label'])
-                            label.set_torrent(torrent_id, watchdir['label'])
-                    if watchdir.get('queue_to_top_toggle', True) and 'queue_to_top' in watchdir:
-                        if watchdir['queue_to_top']:
-                            component.get("TorrentManager").queue_top(torrent_id)
-                        else:
-                            component.get("TorrentManager").queue_bottom(torrent_id)
-                # Rename or delete the torrent once added to deluge.
-                if watchdir.get('append_extension_toggle'):
-                    if not watchdir.get('append_extension'):
-                        watchdir['append_extension'] = ".added"
-                    os.rename(filepath, filepath + watchdir['append_extension'])
-                else:
+        # Check for .magnet files containing multiple magnet links and
+        # create a new .magnet file for each of them.
+        #for filename in os.listdir(watchdir["abspath"]):
+        for root, dirs, files in os.walk(watchdir["abspath"]):
+            for filename in files:
+                try:
+                    filepath = os.path.join(root, filename)
+                    log.debug(filepath)
+                except UnicodeDecodeError, e:
+                    log.error("Unable to auto add torrent due to improper "
+                              "filename encoding: %s", e)
+                    continue
+                if os.path.isdir(filepath):
+                    # Skip directories
+                    continue
+                elif os.path.splitext(filename)[1] == ".magnet" and \
+                        self.split_magnets(filepath):
                     os.remove(filepath)
+
+        #for filename in os.listdir(watchdir["abspath"]):
+        for root, dirs, files in os.walk(watchdir["abspath"]):
+            for filename in files:
+                try:
+                    filepath = os.path.join(root, filename)
+                except UnicodeDecodeError, e:
+                    log.error("Unable to auto add torrent due to improper "
+                              "filename encoding: %s", e)
+                    continue
+                if os.path.isdir(filepath):
+                    # Skip directories
+                    continue
+                else:
+                    ext = os.path.splitext(filename)[1]
+                    if ext == ".torrent":
+                        magnet = False
+                    elif ext == ".magnet":
+                        magnet = True
+                    else:
+                        continue
+                    try:
+                        filedump = self.load_torrent(filepath, magnet)
+                    except (RuntimeError, Exception), e:
+                        # If the torrent is invalid, we keep track of it so that we
+                        # can try again on the next pass.  This is because some
+                        # torrents may not be fully saved during the pass.
+                        log.debug("Torrent is invalid: %s", e)
+                        if filename in self.invalid_torrents:
+                            self.invalid_torrents[filename] += 1
+                            if self.invalid_torrents[filename] >= MAX_NUM_ATTEMPTS:
+                                os.rename(filepath, filepath + ".invalid")
+                                del self.invalid_torrents[filename]
+                        else:
+                            self.invalid_torrents[filename] = 1
+                        continue
+
+                    MovePathSubPath = ""
+                    if filepath.startswith(watchdir["abspath"]):
+                        MovePathSubPath = filepath[len(watchdir["abspath"]):]
+                    
+                    
+                    log.debug("MovePathSubPath: %s" % (MovePathSubPath))
+                    
+                    log.debug("opts[move_completed_path] avant: %s" % (opts["move_completed_path"]))
+                    
+                    opts["move_completed_path"] = os.path.normpath(opts["move_completed_path"] + MovePathSubPath)
+                    
+                    log.debug("opts[move_completed_path] apres: %s" % (opts["move_completed_path"]))
+                       
+                    # The torrent looks good, so lets add it to the session.
+                    if magnet == False:
+                        torrent_id = component.get("TorrentManager").add(
+                            filedump=filedump, filename=filename, options=opts)
+                    elif magnet == True:
+                        torrent_id = component.get("TorrentManager").add(
+                            magnet=filedump, options=opts)
+                    # If the torrent added successfully, set the extra options.
+                    if torrent_id:
+                        if 'Label' in component.get("CorePluginManager").get_enabled_plugins():
+                            if watchdir.get('label_toggle', True) and watchdir.get('label'):
+                                label = component.get("CorePlugin.Label")
+                                if not watchdir['label'] in label.get_labels():
+                                    label.add(watchdir['label'])
+                                label.set_torrent(torrent_id, watchdir['label'])
+                        if watchdir.get('queue_to_top_toggle', True) and 'queue_to_top' in watchdir:
+                            if watchdir['queue_to_top']:
+                                component.get("TorrentManager").queue_top(torrent_id)
+                            else:
+                                component.get("TorrentManager").queue_bottom(torrent_id)
+                    else:
+                        # torrent handle is invalid and so is the magnet link
+                        if magnet == True:
+                            log.debug("invalid magnet link")
+                            os.rename(filepath, filepath + ".invalid")
+                            continue
+
+                    # Rename, copy or delete the torrent once added to deluge.
+                    if watchdir.get('append_extension_toggle'):
+                        if not watchdir.get('append_extension'):
+                            watchdir['append_extension'] = ".added"
+                        os.rename(filepath, filepath + watchdir['append_extension'])
+                    else:
+                        os.remove(filepath)
 
     def on_update_watchdir_error(self, failure, watchdir_id):
         """Disables any watch folders with unhandled exceptions."""
         self.disable_watchdir(watchdir_id)
         log.error("Disabling '%s', error during update: %s" % (self.watchdirs[watchdir_id]["path"], failure))
-        
+
     @export
     def enable_watchdir(self, watchdir_id):
         watchdir_id = str(watchdir_id)
@@ -258,8 +353,8 @@ class Core(CorePluginBase):
         if not self.watchdirs[watchdir_id]['enabled']:
             self.watchdirs[watchdir_id]['enabled'] = True
             self.config.save()
-            component.get("EventManager").emit(AutoaddOptionsChangedEvent())
-        
+            component.get("EventManager").emit(AutoaddPlusOptionsChangedEvent())
+
     @export
     def disable_watchdir(self, watchdir_id):
         watchdir_id = str(watchdir_id)
@@ -272,7 +367,7 @@ class Core(CorePluginBase):
         if self.watchdirs[watchdir_id]['enabled']:
             self.watchdirs[watchdir_id]['enabled'] = False
             self.config.save()
-            component.get("EventManager").emit(AutoaddOptionsChangedEvent())
+            component.get("EventManager").emit(AutoaddPlusOptionsChangedEvent())
 
     @export
     def set_config(self, config):
@@ -281,13 +376,13 @@ class Core(CorePluginBase):
         for key in config.keys():
             self.config[key] = config[key]
         self.config.save()
-        component.get("EventManager").emit(AutoaddOptionsChangedEvent())
+        component.get("EventManager").emit(AutoaddPlusOptionsChangedEvent())
 
     @export
     def get_config(self):
         """Returns the config dictionary."""
         return self.config.config
-        
+
     @export()
     def get_watchdirs(self):
         return self.watchdirs.keys()
@@ -317,9 +412,9 @@ class Core(CorePluginBase):
             self.enable_watchdir(watchdir_id)
         self.config['next_id'] = watchdir_id + 1
         self.config.save()
-        component.get("EventManager").emit(AutoaddOptionsChangedEvent())
+        component.get("EventManager").emit(AutoaddPlusOptionsChangedEvent())
         return watchdir_id
-        
+
     @export
     def remove(self, watchdir_id):
         """Remove a watch folder."""
@@ -329,4 +424,4 @@ class Core(CorePluginBase):
             self.disable_watchdir(watchdir_id)
         del self.watchdirs[watchdir_id]
         self.config.save()
-        component.get("EventManager").emit(AutoaddOptionsChangedEvent())
+        component.get("EventManager").emit(AutoaddPlusOptionsChangedEvent())
