@@ -290,8 +290,8 @@ class Core(CorePluginBase):
                         continue
 
                     MovePathSubPath = ""
-                    if filepath.startswith(watchdir["abspath"]):
-                        MovePathSubPath = filepath[len(watchdir["abspath"]):]
+                    if root.startswith(watchdir["abspath"]):
+                        MovePathSubPath = root[len(watchdir["abspath"]):]
                     
                     
                     log.debug("MovePathSubPath: %s" % (MovePathSubPath))
