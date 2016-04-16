@@ -1,5 +1,4 @@
 build/*
-dist/*
 AutoAddPlus.egg-info/*
 *.pyc
 *.pyo
